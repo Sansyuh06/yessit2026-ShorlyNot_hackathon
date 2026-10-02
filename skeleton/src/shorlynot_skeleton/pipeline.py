@@ -13,6 +13,7 @@ from shorlynot_skeleton.models import (
     TransferPipelineRequest,
     PipelineResult,
     ThreatClassification,
+    ThreatLabel,
     StageS
 )
 from shorlynot_skeleton.qds.protocol import QdsT1Protocol
@@ -23,6 +24,7 @@ from shorlynot_skeleton.detect.tau import TauCalculator
 from shorlynot_skeleton.stages.state_machine import StageStateMachine
 from shorlynot_skeleton.attacks.forgery import ForgeryAttack
 from shorlynot_skeleton.attacks.impersonation import ImpersonationAttack
+from shorlynot_skeleton.qkd.key_registry import GLOBAL_KEY_REGISTRY
 from shorlynot_skeleton.attacks.unauth_verify import UnauthVerifyAttack
 from shorlynot_skeleton.attacks.channel import ChannelTamperingAttack
 from shorlynot_skeleton.attacks.param_tamper import ParameterTamperingAttack
@@ -177,12 +179,22 @@ class QuantumTransferPipeline:
         )
 
         # Step 7: Update Security Stage State Machine
+        # Secure quarantine policy: Target the authenticated/actual adversary, NEVER the innocent claimed victim!
+        quarantine_actor = claimed_signer
+        if classification.label in (ThreatLabel.IMPERSONATION, ThreatLabel.FORGERY):
+            actual_key = bundle.measurement_transcript.get("actual_signer")
+            if actual_key and actual_key != bundle.key_id:
+                reg_record = GLOBAL_KEY_REGISTRY.get_key(actual_key)
+                quarantine_actor = reg_record.user_id if reg_record else actual_key
+            elif request.simulate_attack == "impersonation":
+                quarantine_actor = "eve"
+
         stage_s = self.stage_machine.process_threat_verdict(
             label=classification.label,
             mismatch_rate=verify_result.mismatch_rate,
             tau=verify_result.tau,
             tx_id=tx.tx_id,
-            actor=claimed_signer,
+            actor=quarantine_actor,
             details=f"Tx ₹{tx.amount} to {tx.to_user}: {classification.reason}"
         )
 

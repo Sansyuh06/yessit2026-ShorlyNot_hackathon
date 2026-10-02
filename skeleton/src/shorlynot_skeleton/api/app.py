@@ -5,9 +5,11 @@ Normative specification from PRD §7 and Part C4.
 """
 
 import collections
+import hmac
+import os
 import uuid
 from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -29,6 +31,49 @@ from shorlynot_skeleton.backends.sim import SimBackend, IBMBackend
 from shorlynot_skeleton.detect.tau import TauCalculator
 from shorlynot_skeleton.qds.sessions import GLOBAL_ENTANGLEMENT_STORE
 from shorlynot_skeleton.qkd.key_registry import GLOBAL_KEY_REGISTRY
+
+API_SECRET_KEY = os.environ.get("SHORLYNOT_API_KEY", "shorlynot-service-secret-key-2026")
+ADMIN_SECRET_KEY = os.environ.get("SHORLYNOT_ADMIN_KEY", "shorlynot-admin-secret-key-2026")
+
+
+def verify_api_auth(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: Optional[str] = Header(None)
+) -> str:
+    """Verifies service-to-service communication credentials."""
+    token = x_api_key
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Missing X-API-Key or Bearer token header."
+        )
+    if not (hmac.compare_digest(token.encode("utf-8"), API_SECRET_KEY.encode("utf-8")) or
+            hmac.compare_digest(token.encode("utf-8"), ADMIN_SECRET_KEY.encode("utf-8"))):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Invalid API service credentials."
+        )
+    return token
+
+
+def verify_admin_auth(
+    token: str = Depends(verify_api_auth),
+    x_api_role: Optional[str] = Header(None, alias="X-API-Role")
+) -> bool:
+    """Verifies administrative or SOC credentials for sensitive endpoints."""
+    is_admin = (
+        hmac.compare_digest(token.encode("utf-8"), ADMIN_SECRET_KEY.encode("utf-8")) or
+        (x_api_role in ("admin", "soc") and hmac.compare_digest(token.encode("utf-8"), API_SECRET_KEY.encode("utf-8")))
+    )
+    if not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Administrative or SOC privileges required."
+        )
+    return True
 
 
 app = FastAPI(
@@ -132,7 +177,7 @@ def get_status() -> Dict[str, Any]:
     }
 
 
-@app.post("/v1/qkd/session")
+@app.post("/v1/qkd/session", dependencies=[Depends(verify_api_auth)])
 def create_qkd_session() -> Dict[str, Any]:
     """Negotiate a BB84 QKD session key and measure channel QBER."""
     res = pipeline.qkd.negotiate_session()
@@ -146,9 +191,15 @@ def create_qkd_session() -> Dict[str, Any]:
     }
 
 
-@app.post("/v1/sign", response_model=SignatureBundle)
+@app.post("/v1/sign", response_model=SignatureBundle, dependencies=[Depends(verify_api_auth)])
 def sign_payload(req: SignRequest) -> SignatureBundle:
     """Generate a ShorlyNot-QDS-T1 signature bundle using real Qiskit Aer teleportation circuits."""
+    if req.n_checks < 16 or req.n_checks > 512 or req.L > 1024:
+        raise HTTPException(status_code=400, detail="Parameters out of allowable bounds (16 <= n_checks <= 512, L <= 1024).")
+    key_record = GLOBAL_KEY_REGISTRY.get_key(req.key_id)
+    if not key_record or key_record.status != "active":
+        raise HTTPException(status_code=403, detail=f"Key '{req.key_id}' is not registered or active in quantum key registry.")
+
     bundle = pipeline.qds.sign(
         payload_hash=req.payload_hash,
         key_id=req.key_id,
@@ -161,7 +212,7 @@ def sign_payload(req: SignRequest) -> SignatureBundle:
     return bundle
 
 
-@app.post("/v1/verify")
+@app.post("/v1/verify", dependencies=[Depends(verify_api_auth)])
 def verify_signature(req: VerifyRequest) -> Dict[str, Any]:
     """
     Verify a ShorlyNot-QDS-T1 signature bundle.
@@ -202,7 +253,7 @@ def verify_signature(req: VerifyRequest) -> Dict[str, Any]:
     }
 
 
-@app.post("/v1/pipeline/transfer", response_model=PipelineResult)
+@app.post("/v1/pipeline/transfer", response_model=PipelineResult, dependencies=[Depends(verify_api_auth)])
 def execute_transfer_pipeline(req: TransferPipelineRequest) -> PipelineResult:
     """Execute end-to-end quantum transfer pipeline."""
     result = pipeline.execute_transfer(req)
@@ -221,7 +272,7 @@ def execute_transfer_pipeline(req: TransferPipelineRequest) -> PipelineResult:
     return result
 
 
-@app.post("/v1/attacks/{attack_type}", response_model=PipelineResult)
+@app.post("/v1/attacks/{attack_type}", response_model=PipelineResult, dependencies=[Depends(verify_admin_auth)])
 def trigger_attack(attack_type: str, req: Optional[AttackTriggerRequest] = None) -> PipelineResult:
     """Trigger specific attack vector directly on the transfer pipeline."""
     user = req.target_user if req else "alice"
@@ -256,7 +307,7 @@ def get_stage_events(limit: int = Query(default=50, ge=1, le=200)) -> List[Stage
     return pipeline.stage_machine.get_events(limit=limit)
 
 
-@app.post("/v1/stages/reset")
+@app.post("/v1/stages/reset", dependencies=[Depends(verify_admin_auth)])
 def reset_stages() -> Dict[str, Any]:
     """Reset security stages to normal baseline (S0, Q0)."""
     pipeline.stage_machine.reset()
@@ -316,7 +367,7 @@ class KeyRegisterRequest(BaseModel):
     role: str = "customer"
 
 
-@app.post("/v1/keys/generate")
+@app.post("/v1/keys/generate", dependencies=[Depends(verify_admin_auth)])
 def generate_key_pair(req: KeyGenerateRequest) -> Dict[str, Any]:
     """
     Execute simulated QKD ceremony (BB84) to provision a new quantum-bound key pair for a user.
@@ -340,7 +391,7 @@ def list_keys() -> List[Dict[str, Any]]:
     return [k.model_dump() for k in GLOBAL_KEY_REGISTRY.list_keys()]
 
 
-@app.post("/v1/admin/reseed")
+@app.post("/v1/admin/reseed", dependencies=[Depends(verify_admin_auth)])
 def admin_reseed() -> Dict[str, Any]:
     """Reseed demo state, stages, and replay cache."""
     pipeline.stage_machine.reset()

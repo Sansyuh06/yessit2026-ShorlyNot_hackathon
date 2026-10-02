@@ -229,13 +229,17 @@ log_info "  Fail action  : ${FAIL_ACTION}"
 # Write PID file
 echo "$$" > "$PID_FILE" 2>/dev/null
 
-# Clean any stale rules from a previous unclean shutdown
-enforce_allow
+# Fail-closed boot policy: default to blocking until verified KMS poll
+if [ "$FAIL_ACTION" = "block" ]; then
+    log_info "Fail-closed boot policy active: enforcing DROP on relay port $RELAY_PORT until KMS link is verified"
+    enforce_drop
+    current_state="RED"
+else
+    enforce_allow
+    current_state="INIT"
+fi
 
-# State tracking
-current_state="INIT"
 fail_count=0
-
 echo "$current_state" > "$STATE_FILE" 2>/dev/null
 
 while true; do

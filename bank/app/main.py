@@ -6,6 +6,8 @@ FastAPI :8080 service for SIH 2026 PS 26141.
 import os
 import math
 import uuid
+import hmac
+import threading
 from fastapi import FastAPI, Request, Form, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +23,8 @@ from shorlynot_skeleton.models import (
     TauPreset
 )
 
+_transfer_lock = threading.Lock()
+
 app = FastAPI(title="ShorlyNot Mock Bank & SOC", version="3.0.0")
 
 # Setup template engine and static files
@@ -34,6 +38,11 @@ auth_mgr = BankAuthManager()
 ledger = BankLedger()
 skeleton_client = SkeletonServiceClient()
 router_client = GLOBAL_ROUTER_CLIENT
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -75,8 +84,13 @@ def handle_login(request: Request, response: Response, username: str = Form(...)
         )
 
     token = auth_mgr.create_session(user.username)
-    resp = RedirectResponse(url="/home", status_code=status.HTTP_303_SEE_OTHER)
-    resp.set_cookie(key="session_token", value=token, httponly=True)
+    next_url = request.query_params.get("next", "/home")
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/home"
+    if user.role == "soc" and next_url == "/home":
+        next_url = "/soc"
+    resp = RedirectResponse(url=next_url, status_code=status.HTTP_303_SEE_OTHER)
+    resp.set_cookie(key="session_token", value=token, httponly=True, samesite="lax")
     return resp
 
 
@@ -194,8 +208,9 @@ def handle_transfer(
                 }
             )
 
-    # Balance and numeric integrity check
-    if not math.isfinite(amount) or amount <= 0 or amount > user.balance:
+    # Recipient validation: must exist and cannot be self or system sink
+    to_user = to_user.strip()
+    if to_user == user.username:
         return templates.TemplateResponse(
             request=request,
             name="transfer.html",
@@ -203,10 +218,52 @@ def handle_transfer(
                 "current_user": user,
                 "stage_state": stage_state,
                 "active_tab": "transfer",
-                "error": f"Invalid transfer amount. Maximum available: ₹{user.balance:,.2f}",
+                "error": "Self-transfers are not permitted.",
                 "success": None
             }
         )
+
+    recipient = auth_mgr.users.get(to_user)
+    if not recipient or recipient.role not in ("customer", "attacker"):
+        return templates.TemplateResponse(
+            request=request,
+            name="transfer.html",
+            context={
+                "current_user": user,
+                "stage_state": stage_state,
+                "active_tab": "transfer",
+                "error": f"Invalid recipient account '{to_user}'. Recipient must be an active registered user account.",
+                "success": None
+            }
+        )
+
+    # Balance and numeric integrity check with concurrency lock
+    if not math.isfinite(amount) or amount <= 0:
+        return templates.TemplateResponse(
+            request=request,
+            name="transfer.html",
+            context={
+                "current_user": user,
+                "stage_state": stage_state,
+                "active_tab": "transfer",
+                "error": "Invalid transfer amount. Amount must be a positive finite number.",
+                "success": None
+            }
+        )
+
+    with _transfer_lock:
+        if amount > user.balance:
+            return templates.TemplateResponse(
+                request=request,
+                name="transfer.html",
+                context={
+                    "current_user": user,
+                    "stage_state": stage_state,
+                    "active_tab": "transfer",
+                    "error": f"Insufficient balance. Maximum available: ₹{user.balance:,.2f}",
+                    "success": None
+                }
+            )
 
     # Create transaction payload
     tx_id = f"tx-{uuid.uuid4().hex[:12]}"
@@ -244,24 +301,42 @@ def handle_transfer(
     updated_stage_state = skeleton_client.get_stages()
 
     if result.success:
-        # Commit double-entry ledger mutation
-        user.balance -= amount
-        recipient = auth_mgr.users.get(to_user)
-        if recipient:
+        # Atomic double-entry ledger mutation under concurrency lock
+        with _transfer_lock:
+            if amount > user.balance:
+                return templates.TemplateResponse(
+                    request=request,
+                    name="transfer.html",
+                    context={
+                        "current_user": user,
+                        "stage_state": updated_stage_state,
+                        "active_tab": "transfer",
+                        "error": f"Insufficient funds during execution. Available balance: ₹{user.balance:,.2f}",
+                        "success": None
+                    }
+                )
+
+            user.balance -= amount
             recipient.balance += amount
 
-        ledger.record_transaction(
-            tx_id=tx_id,
-            from_user=user.username,
-            to_user=to_user,
-            amount=amount,
-            status="COMMITTED",
-            mismatch_rate=result.verify_result.mismatch_rate if result.verify_result else 0.0,
-            tau=result.verify_result.tau if result.verify_result else 0.2097,
-            threat_label=result.threat_classification.label.value if result.threat_classification else "OK",
-            stage_s=result.stage_s.value,
-            details=f"Transfer ₹{amount:,.2f} to {to_user} committed to ledger."
-        )
+            try:
+                ledger.record_transaction(
+                    tx_id=tx_id,
+                    from_user=user.username,
+                    to_user=to_user,
+                    amount=amount,
+                    status="COMMITTED",
+                    mismatch_rate=result.verify_result.mismatch_rate if result.verify_result else 0.0,
+                    tau=result.verify_result.tau if result.verify_result else 0.2097,
+                    threat_label=result.threat_classification.label.value if result.threat_classification else "OK",
+                    stage_s=result.stage_s.value,
+                    details=f"Transfer ₹{amount:,.2f} to {to_user} committed to ledger."
+                )
+            except Exception as db_err:
+                # Rollback balances immediately on ledger write error
+                user.balance += amount
+                recipient.balance -= amount
+                raise RuntimeError(f"Database ledger commitment failure: {db_err}") from db_err
 
         return templates.TemplateResponse(
             request=request,
@@ -341,14 +416,21 @@ def locked_page(request: Request):
 
 @app.get("/soc", response_class=HTMLResponse)
 def soc_page(request: Request):
+    user = auth_mgr.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login?next=/soc", status_code=status.HTTP_303_SEE_OTHER)
+    if user.role != "soc":
+        return HTMLResponse(
+            content="""<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body style="background:#090d16;color:#f87171;font-family:sans-serif;padding:3rem;text-align:center;"><h1>403 Forbidden: Access Denied</h1><p>Dark SOC Radar Console requires SOC Operator privileges (ops / ops123).</p><a href="/home" style="color:#38bdf8;">Return to Customer Portal</a></body></html>""",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
     stage_state = skeleton_client.get_stages()
     events = skeleton_client.get_events(limit=50)
-    current_user = auth_mgr.get_current_user(request)
     return templates.TemplateResponse(
         request=request,
         name="soc.html",
         context={
-            "current_user": current_user,
+            "current_user": user,
             "stage_state": stage_state,
             "events": events
         }
@@ -356,18 +438,24 @@ def soc_page(request: Request):
 
 
 def require_soc_auth(request: Request):
-    user = auth_mgr.get_current_user(request)
-    if user:
-        return user
+    """
+    Role-Based Access Control (RBAC) guard for SOC operations.
+    Enforces that the caller is an authenticated SOC operator.
+    Accepts:
+    1. Valid active session cookie belonging to a user with role == 'soc' (e.g. 'ops').
+    2. HTTP Authorization header 'Bearer <secret>' matching SHORLYNOT_SOC_SECRET.
+    Rejects: regular customer accounts, hardcoded demo tokens, and backdoor headers.
+    """
     auth_header = request.headers.get("Authorization", "")
     expected_token = os.environ.get("SHORLYNOT_SOC_SECRET", "ops-secret-key-2026")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        if token in (expected_token, "ops-token-demo"):
-            return True
-    # For local test suites, allow if explicit test header or unauthenticated in demo mode
-    if request.headers.get("X-Test-Client") == "1" or os.environ.get("SHORLYNOT_DEMO_UNAUTH_SOC") == "1":
-        return True
+        if token and hmac.compare_digest(token.encode("utf-8"), expected_token.encode("utf-8")):
+            return auth_mgr.users.get("ops")
+
+    user = auth_mgr.get_current_user(request)
+    if user and user.role == "soc":
+        return user
     return None
 
 
@@ -416,13 +504,34 @@ def soc_reset_stages(request: Request):
 
 
 @app.get("/api/soc/feed")
-def soc_live_feed():
-    stage_state = skeleton_client.get_stages()
-    events = skeleton_client.get_events(limit=30)
-    return JSONResponse(content={
-        "stages": stage_state.model_dump(),
-        "events": [e.model_dump() for e in events]
-    })
+def soc_live_feed(request: Request):
+    auth_user = require_soc_auth(request)
+    if not auth_user:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication Required: SOC Operator privileges required to access live threat telemetry."}
+        )
+    try:
+        stage_state = skeleton_client.get_stages()
+        events = skeleton_client.get_events(limit=30)
+        return JSONResponse(content={
+            "stages": stage_state.model_dump(),
+            "events": [e.model_dump() for e in events]
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "stages": {
+                    "stage_s": "S0",
+                    "stage_q": "Q0",
+                    "reason": f"Connecting to Q-STDF Engine... ({str(e)})",
+                    "active_threats": [],
+                    "updated_at": 0.0
+                },
+                "events": []
+            }
+        )
 
 
 @app.post("/api/soc/test_transfer")

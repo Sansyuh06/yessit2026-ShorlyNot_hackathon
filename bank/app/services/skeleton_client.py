@@ -30,7 +30,21 @@ class SkeletonServiceClient:
         # Default to environment variable or standard port 8000
         self.base_url = base_url or os.environ.get("SHORLYNOT_API_URL", "http://127.0.0.1:8000")
         self.require_api = os.environ.get("SHORLYNOT_REQUIRE_API", "0").lower() in ("1", "true", "yes")
+        self.api_key = os.environ.get("SHORLYNOT_API_KEY", "shorlynot-service-secret-key-2026")
         self._shared_singleton = None
+        self._client: Optional[httpx.Client] = None
+        self._api_online: Optional[bool] = None
+
+    @property
+    def http_client(self) -> httpx.Client:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client(
+                base_url=self.base_url,
+                timeout=5.0,
+                headers={"X-API-Key": self.api_key, "X-API-Role": "soc"},
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50)
+            )
+        return self._client
 
     @property
     def shared_pipeline(self):
@@ -46,82 +60,85 @@ class SkeletonServiceClient:
         return self._shared_singleton
 
     def _is_api_available(self) -> bool:
+        if not self.require_api and os.environ.get("PYTEST_CURRENT_TEST"):
+            return False
         try:
-            with httpx.Client(base_url=self.base_url, timeout=0.8) as client:
-                resp = client.get("/v1/status")
+            with httpx.Client(base_url=self.base_url, timeout=0.2) as probe_client:
+                resp = probe_client.get("/v1/status")
                 return resp.status_code == 200
         except Exception:
             return False
 
     def execute_transfer(self, req: TransferPipelineRequest) -> PipelineResult:
-        try:
-            with httpx.Client(base_url=self.base_url, timeout=5.0) as client:
-                resp = client.post("/v1/pipeline/transfer", json=req.model_dump())
+        if self.require_api or self._is_api_available():
+            try:
+                resp = self.http_client.post("/v1/pipeline/transfer", json=req.model_dump(), timeout=10.0)
                 if resp.status_code in (200, 403, 423):
                     return PipelineResult(**resp.json())
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            if self.require_api:
-                raise RuntimeError(
-                    f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
-                    f"SHORLYNOT_REQUIRE_API=1 prevents fallback to ensure centralized stage enforcement."
-                ) from e
-        except Exception as e:
-            raise RuntimeError(f"Skeleton API communication error: {e}") from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if self.require_api:
+                    raise RuntimeError(
+                        f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
+                        f"SHORLYNOT_REQUIRE_API=1 prevents fallback to ensure centralized stage enforcement."
+                    ) from e
+            except Exception as e:
+                raise RuntimeError(f"Skeleton API communication error: {e}") from e
 
         # Fallback ONLY to the shared API singleton (single shared process in tests/monolith)
         return self.shared_pipeline.execute_transfer(req)
 
     def get_stages(self) -> StageState:
-        try:
-            with httpx.Client(base_url=self.base_url, timeout=1.5) as client:
-                resp = client.get("/v1/stages")
+        if self.require_api or self._is_api_available():
+            try:
+                resp = self.http_client.get("/v1/stages", timeout=5.0)
                 if resp.status_code == 200:
                     return StageState(**resp.json())
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            if self.require_api:
-                raise RuntimeError(
-                    f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
-                    f"SHORLYNOT_REQUIRE_API=1 is active."
-                ) from e
-        except Exception as e:
-            raise RuntimeError(f"Skeleton API communication error: {e}") from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if self.require_api:
+                    raise RuntimeError(
+                        f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
+                        f"SHORLYNOT_REQUIRE_API=1 is active."
+                    ) from e
+            except Exception as e:
+                raise RuntimeError(f"Skeleton API communication error: {e}") from e
 
         return self.shared_pipeline.stage_machine.get_state()
 
     def get_events(self, limit: int = 50) -> List[StageEvent]:
-        try:
-            with httpx.Client(base_url=self.base_url, timeout=1.5) as client:
-                resp = client.get(f"/v1/stages/events?limit={limit}")
+        if self.require_api or self._is_api_available():
+            try:
+                resp = self.http_client.get(f"/v1/stages/events?limit={limit}", timeout=5.0)
                 if resp.status_code == 200:
                     return [StageEvent(**e) for e in resp.json()]
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            if self.require_api:
-                raise RuntimeError(
-                    f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
-                    f"SHORLYNOT_REQUIRE_API=1 is active."
-                ) from e
-        except Exception as e:
-            raise RuntimeError(f"Skeleton API communication error: {e}") from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if self.require_api:
+                    raise RuntimeError(
+                        f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
+                        f"SHORLYNOT_REQUIRE_API=1 is active."
+                    ) from e
+            except Exception as e:
+                raise RuntimeError(f"Skeleton API communication error: {e}") from e
 
         return self.shared_pipeline.stage_machine.get_events(limit=limit)
 
     def trigger_attack(self, attack_type: str, user: str = "alice", amount: float = 1000.0) -> PipelineResult:
-        try:
-            with httpx.Client(base_url=self.base_url, timeout=5.0) as client:
-                resp = client.post(
+        if self.require_api or self._is_api_available():
+            try:
+                resp = self.http_client.post(
                     f"/v1/attacks/{attack_type}",
-                    json={"attack_type": attack_type, "target_user": user, "amount": amount}
+                    json={"attack_type": attack_type, "target_user": user, "amount": amount},
+                    timeout=10.0
                 )
                 if resp.status_code in (200, 403, 423):
                     return PipelineResult(**resp.json())
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            if self.require_api:
-                raise RuntimeError(
-                    f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
-                    f"SHORLYNOT_REQUIRE_API=1 is active."
-                ) from e
-        except Exception as e:
-            raise RuntimeError(f"Skeleton API communication error: {e}") from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if self.require_api:
+                    raise RuntimeError(
+                        f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
+                        f"SHORLYNOT_REQUIRE_API=1 is active."
+                    ) from e
+            except Exception as e:
+                raise RuntimeError(f"Skeleton API communication error: {e}") from e
 
         tx = TransactionPayload(
             from_user=user,
@@ -140,38 +157,38 @@ class SkeletonServiceClient:
         return self.shared_pipeline.execute_transfer(pipe_req)
 
     def reset_stages(self) -> Dict[str, Any]:
-        try:
-            with httpx.Client(base_url=self.base_url, timeout=2.0) as client:
-                resp = client.post("/v1/stages/reset")
+        if self.require_api or self._is_api_available():
+            try:
+                resp = self.http_client.post("/v1/stages/reset", timeout=5.0)
                 if resp.status_code == 200:
                     return resp.json()
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            if self.require_api:
-                raise RuntimeError(
-                    f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
-                    f"SHORLYNOT_REQUIRE_API=1 is active."
-                ) from e
-        except Exception as e:
-            raise RuntimeError(f"Skeleton API communication error: {e}") from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if self.require_api:
+                    raise RuntimeError(
+                        f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
+                        f"SHORLYNOT_REQUIRE_API=1 is active."
+                    ) from e
+            except Exception as e:
+                raise RuntimeError(f"Skeleton API communication error: {e}") from e
 
         self.shared_pipeline.stage_machine.reset()
         self.shared_pipeline.classifier.clear_replay_cache()
         return {"status": "success", "message": "Stages reset on shared pipeline singleton."}
 
     def get_metrics(self) -> MetricSummary:
-        try:
-            with httpx.Client(base_url=self.base_url, timeout=2.0) as client:
-                resp = client.get("/v1/metrics")
+        if self.require_api or self._is_api_available():
+            try:
+                resp = self.http_client.get("/v1/metrics", timeout=5.0)
                 if resp.status_code == 200:
                     return MetricSummary(**resp.json())
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            if self.require_api:
-                raise RuntimeError(
-                    f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
-                    f"SHORLYNOT_REQUIRE_API=1 is active."
-                ) from e
-        except Exception as e:
-            raise RuntimeError(f"Skeleton API communication error: {e}") from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if self.require_api:
+                    raise RuntimeError(
+                        f"Skeleton API at {self.base_url} is unreachable ({type(e).__name__}). "
+                        f"SHORLYNOT_REQUIRE_API=1 is active."
+                    ) from e
+            except Exception as e:
+                raise RuntimeError(f"Skeleton API communication error: {e}") from e
 
         from shorlynot_skeleton.detect.tau import TauCalculator
         return MetricSummary(

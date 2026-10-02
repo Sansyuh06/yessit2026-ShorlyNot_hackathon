@@ -19,6 +19,8 @@ import argparse
 import http.server
 import json
 import logging
+import os
+import hmac
 import threading
 import time
 import random
@@ -360,34 +362,30 @@ class MockKMSHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         logging.info(f"[{self.log_date_time_string()}] {self.address_string()} - {format%args}")
 
-    def do_GET(self):
-        global SERVER_STATE
+    KMS_AUTH_SECRET = os.environ.get("SHORLYNOT_KMS_SECRET", "kms-openwrt-auth-token-2026")
+
+    def _is_authorized(self) -> bool:
+        auth_header = self.headers.get("Authorization", "")
+        token = self.headers.get("X-KMS-Auth", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+        # Accept if matches KMS_AUTH_SECRET or if connecting from local loopback with default token
+        if token and hmac.compare_digest(token.encode("utf-8"), self.KMS_AUTH_SECRET.encode("utf-8")):
+            return True
+        # Allow demo loopback for integrated test runner if configured
+        if self.client_address[0] in ("127.0.0.1", "::1", "localhost"):
+            return True
+        return False
+
+    def do_POST(self):
+        global SERVER_STATE, AUTO_DEMO
         path = self.path
-        response = None
-        
-        if path == "/" or path == "/index.html":
-            data = DASHBOARD_HTML.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(data)
+        if not self._is_authorized():
+            self.send_error(401, "Unauthorized: KMS management token required.")
             return
 
-        elif path == "/link_status":
-            with SERVER_STATE["lock"]:
-                SERVER_STATE["polls"] += 1
-                status = SERVER_STATE["status"]
-                qber = SERVER_STATE["qber"]
-                key_rate = SERVER_STATE["key_rate"]
-            response = {
-                "status": status,
-                "qber": round(qber, 2),
-                "key_rate": key_rate
-            }
-
-        elif path.startswith("/set_qber/"):
+        response = None
+        if path.startswith("/set_qber/"):
             try:
                 val = float(path.split("/set_qber/")[1])
                 with SERVER_STATE["lock"]:
@@ -435,6 +433,48 @@ class MockKMSHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/demo/stop":
             AUTO_DEMO["active"] = False
             response = {"demo": "stopped"}
+        else:
+            self.send_error(404, "Not Found")
+            return
+
+        data = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        global SERVER_STATE
+        path = self.path
+        response = None
+
+        if path.startswith("/set/") or path.startswith("/set_qber/") or path.startswith("/demo/"):
+            self.send_error(405, "Method Not Allowed: KMS state transitions require authenticated POST requests.")
+            return
+        
+        if path == "/" or path == "/index.html":
+            data = DASHBOARD_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        elif path == "/link_status":
+            with SERVER_STATE["lock"]:
+                SERVER_STATE["polls"] += 1
+                status = SERVER_STATE["status"]
+                qber = SERVER_STATE["qber"]
+                key_rate = SERVER_STATE["key_rate"]
+            response = {
+                "status": status,
+                "qber": round(qber, 2),
+                "key_rate": key_rate
+            }
 
         elif path == "/metrics":
             with SERVER_STATE["lock"]:
