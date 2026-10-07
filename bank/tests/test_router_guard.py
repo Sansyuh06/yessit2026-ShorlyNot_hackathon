@@ -33,14 +33,14 @@ def test_router_status_endpoint_returns_hardware_telemetry():
 
 def test_router_set_state_and_qber():
     # Set to RED
-    resp = client.post("/api/router/set_state?state=RED", headers={"X-Test-Client": "1"})
+    resp = client.post("/api/router/set_state?state=RED", headers={"Authorization": "Bearer ops-secret-key-2026"})
     assert resp.status_code == 200
     status_data = client.get("/api/router/status").json()
     assert status_data["status"] == "RED"
     assert "drop" in status_data["last_rule"]
 
     # Set to GREEN
-    resp = client.post("/api/router/set_state?state=GREEN", headers={"X-Test-Client": "1"})
+    resp = client.post("/api/router/set_state?state=GREEN", headers={"Authorization": "Bearer ops-secret-key-2026"})
     assert resp.status_code == 200
     status_data = client.get("/api/router/status").json()
     assert status_data["status"] == "GREEN"
@@ -53,7 +53,7 @@ def test_transfer_blocked_when_router_is_red():
     assert login_resp.status_code == 303
 
     # Set router to RED
-    client.post("/api/router/set_state?state=RED", headers={"X-Test-Client": "1"})
+    client.post("/api/router/set_state?state=RED", headers={"Authorization": "Bearer ops-secret-key-2026"})
 
     # Attempt transfer
     transfer_resp = client.post("/transfer", data={"to_user": "bob", "amount": 100.0})
@@ -63,7 +63,7 @@ def test_transfer_blocked_when_router_is_red():
     assert "Relay Port 8765" in transfer_resp.text
 
     # Restore to GREEN
-    client.post("/api/router/set_state?state=GREEN", headers={"X-Test-Client": "1"})
+    client.post("/api/router/set_state?state=GREEN", headers={"Authorization": "Bearer ops-secret-key-2026"})
 
 
 def test_router_client_health_check_and_poll_counter():

@@ -24,8 +24,8 @@ Under honest simulator/channel noise floor $p_0 = 0.02$ and false-reject budget 
 > **Latency decomposition**: the pipeline figure includes $n$ real Qiskit Aer sign circuits (dominant cost). Verification alone — analytic Born-rule evaluation, no circuit re-execution — is $\mathcal{O}(n)$ and runs at ~1 ms per transaction; see the `avg_verify_latency_ms` column of `benchmarks_summary.csv` (e.g. 1.068 ms at $n = 64$).
 
 ### Key Mathematical Insights:
-1. **Exponential Security Scaling**: As $n$ increases from 32 to 128, the theoretical random forgery acceptance probability $P_{\text{forge}}$ decreases exponentially from $\approx 10^{-3}$ to **$< 10^{-11}$**.
-2. **Information-Theoretic Framing**: In the stated independent Pauli measurement model, random guessers cannot beat the binomial tail threshold $\lfloor \tau n \rfloor$.
+1. **Exponential Security Scaling**: As $n$ increases from 32 to 128, the theoretical random forgery acceptance probability $P_{\text{forge}}$ decreases exponentially from $\approx 1.00 \times 10^{-2}$ to **$< 10^{-11}$** (and $< 10^{-15}$ at $n=128$).
+2. **Statistical Tamper-Evidence Framing**: In the stated independent Pauli measurement model, random guessers cannot beat the binomial tail threshold $\lfloor \tau n \rfloor$.
 3. **Sub-Millisecond Verification**: Efficient vectorized/single-qubit projective simulation maintains sub-millisecond per-transaction verification latency for real-time banking throughput.
 
 ---
@@ -53,7 +53,7 @@ Under honest simulator/channel noise floor $p_0 = 0.02$ and false-reject budget 
 ---
 
 ## 4. PS 26141 Compliance Verification
-- [x] Non-ML Statistical Thresholding ($	au$ derived from Hoeffding bound)
-- [x] Information-Theoretic Security Framing via Binomial random guessing bound
+- [x] Non-ML Statistical Thresholding ($\tau$ derived from Hoeffding bound)
+- [x] Statistical Tamper-Evidence Framing via Binomial random guessing bound
 - [x] 5 Deterministic Attack Vector Simulations with 100% Detection
 - [x] Full Teleportation Circuit Semantics with Pauli Corrections ($I, X, Z, XZ$)

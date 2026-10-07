@@ -47,32 +47,33 @@ Any candidate signature with $\hat{p} > \tau$ is classified as a potential **FOR
 
 ---
 
-## 3. Information-Theoretic Forgery Probability ($P_{\text{forge}}$)
+## 3. Statistical Tamper-Evidence & Forgery Detection Bound ($P_{\text{forge}}$)
 
 When an adversary (Eve) attempts to fabricate a signature bundle without access to Alice's entangled qubit:
 1. Bob's subsystem state is the maximally mixed density matrix $\rho_B = \text{Tr}_A(|\Phi^+\rangle\langle\Phi^+|) = \frac{1}{2}I$.
-2. For any guessed syndrome $(m_1, m_2)$ and arbitrary unitary $U$, measuring $\rho_B$ in basis $\beta \in \{Z, X\}$ yields independent random outcomes:
+2. For any guessed syndrome $(m_1, m_2)$ and arbitrary unitary $U$, measuring $\rho_B$ in basis $\beta \in \{Z, X\}$ yields independent random outcomes in the idealized projective model:
    $$\Pr(b' = b) = 0.50, \quad \Pr(b' \ne b) = 0.50$$
 3. For $n$ independent check positions, the number of mismatches follows the binomial distribution $\text{Binomial}(n, 0.50)$.
-4. The forgery is accepted if and only if the total mismatches $X \le \lfloor \tau n \rfloor$.
+4. The candidate signature is accepted if and only if the total mismatches $X \le \lfloor \tau n \rfloor$.
 
-Thus, the theoretical forgery acceptance probability is bounded by:
+Thus, the theoretical forgery acceptance probability under independent unentangled guessing is bounded by:
 $$P_{\text{forge}}(n, \tau) = \sum_{k=0}^{\lfloor \tau \cdot n \rfloor} \binom{n}{k} \left(\frac{1}{2}\right)^n$$
 
 ### Scaling vs. Qubit Number ($p_0 = 0.02, \delta = 0.01$):
-- For $n = 32, \tau \approx 0.288 \implies P_{\text{forge}} \approx 8.93 \times 10^{-3}$
+- For $n = 32, \tau \approx 0.288 \implies P_{\text{forge}} \approx 1.00 \times 10^{-2}$ (1.003% acceptance probability)
 - For $n = 64, \tau \approx 0.210 \implies P_{\text{forge}} \approx 9.40 \times 10^{-7}$
 - For $n = 128, \tau \approx 0.154 \implies P_{\text{forge}} < 10^{-15}$
 
 ---
 
-## 4. Explicit Non-Claims (Scientific Honesty)
+## 4. Explicit Non-Claims & Symmetric Tamper-Evidence Framing (Scientific Honesty)
 
 To maintain scientific integrity for SIH 2026 evaluation:
+- **Symmetric Tamper-Evidence Framing**: As acknowledged in Whitepaper §5.1, the teleportation profile implemented in this software framework provides symmetric tamper-evident authentication across sender and verifier rather than a standalone non-repudiation signature against an untrusted verifier. Forgery bounds reflect statistical projection limits against independent unentangled guessing under the stated model, not physical information-theoretic guarantees from laboratory hardware.
 - **No Physical Photon Hardware Claim**: ShorlyNot is a software and quantum simulator framework (Qiskit Aer / PennyLane); we do not claim to have deployed physical laser/fiber hardware.
 - **No Novel Quantum Physics Claim**: Teleportation and Bell-basis measurements are established principles (Bennett et al. 1993, Gottesman-Chuang 2001). Our novelty is **Q-STDF**: the non-ML statistical threat detection ladder, multi-stage application state machine, and atomic banking workflow integration.
-- **No Machine Learning Claim**: Detection relies strictly on Hoeffding statistical bounds and rule ladders; no neural networks or classifiers are used for threat decisions.
-- **No OS Kernel Manipulation**: Bank lockdown is enforced purely at the application layer ($S_0 \to S_4$), avoiding brittle `iptables` or root OS privileges.
+- **No Machine Learning Claim**: Detection relies strictly on Hoeffding statistical bounds and rule ladders; no neural networks or black-box classifiers are used for threat decisions.
+- **Application & Perimeter Enforcement Separation**: Core bank lockdown is enforced at the application layer ($S_0 \to S_4$), while the companion OpenWrt router firmware guards physical relay forwarding via netfilter/nftables rules.
 
 ---
 

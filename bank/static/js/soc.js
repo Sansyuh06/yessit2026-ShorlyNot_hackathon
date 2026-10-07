@@ -2,6 +2,16 @@
 // Interactive Cyber Threat Monitoring & Defense Simulation Console
 
 document.addEventListener('DOMContentLoaded', () => {
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   // -------------------------------------------------------------------------
   // Telemetry DOM Elements
   // -------------------------------------------------------------------------
@@ -651,13 +661,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const tagClass = `tag-${e.threat_label.toLowerCase().replace('_', '-')}`;
       const timeShort = e.timestamp.split('T')[1].substring(0, 8);
       return `
-        <tr class="${rowClass}" data-event='${JSON.stringify(e).replace(/'/g, "&apos;")}'>
-          <td>${timeShort}</td>
-          <td><span class="soc-tag ${tagClass}">${e.threat_label}</span></td>
+        <tr class="${rowClass}" data-event='${escapeHtml(JSON.stringify(e))}'>
+          <td>${escapeHtml(timeShort)}</td>
+          <td><span class="soc-tag ${tagClass}">${escapeHtml(e.threat_label)}</span></td>
           <td>S${e.stage_s} / Q${e.stage_q}</td>
           <td>${e.mismatch_rate.toFixed(4)}</td>
           <td>${e.tau.toFixed(4)}</td>
-          <td>${e.actor || 'system'}</td>
+          <td>${escapeHtml(e.actor || 'system')}</td>
           <td><button type="button" class="btn-inspect-event">🔍 Inspect</button></td>
         </tr>
       `;
@@ -695,11 +705,11 @@ document.addEventListener('DOMContentLoaded', () => {
     modalContent.innerHTML = `
       <div style="margin-bottom:0.75rem;">
         <span style="font-size:0.7rem; color:var(--soc-text-dim); text-transform:uppercase;">INCIDENT VERDICT:</span><br>
-        <strong style="font-size:1.1rem; color:${isThreat ? '#f87171' : '#34d399'};">${ev.threat_label}</strong>
+        <strong style="font-size:1.1rem; color:${isThreat ? '#f87171' : '#34d399'};">${escapeHtml(ev.threat_label)}</strong>
       </div>
       <table class="params-table" style="margin-bottom:1rem;">
-        <tr><td>Timestamp</td><td>${ev.timestamp}</td></tr>
-        <tr><td>Actor / Target</td><td>${ev.actor || 'system'}</td></tr>
+        <tr><td>Timestamp</td><td>${escapeHtml(ev.timestamp)}</td></tr>
+        <tr><td>Actor / Target</td><td>${escapeHtml(ev.actor || 'system')}</td></tr>
         <tr><td>Cryptographic Stage</td><td>Stage S${ev.stage_s} (QKD Link Q${ev.stage_q})</td></tr>
         <tr><td>Observed Mismatch Rate (p̂)</td><td style="color:${ev.mismatch_rate > ev.tau ? '#ff0055' : '#38bdf8'}">${ev.mismatch_rate.toFixed(4)}</td></tr>
         <tr><td>Hoeffding Bound (τ)</td><td>${ev.tau.toFixed(4)}</td></tr>
@@ -707,7 +717,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </table>
       <div style="background:#090e1a; padding:0.75rem; border-radius:6px; border:1px solid #1e293b; margin-bottom:0.75rem;">
         <div style="font-size:0.7rem; color:var(--soc-text-dim); margin-bottom:0.25rem;">EVENT DETAILS & MITIGATION:</div>
-        <div>${ev.details}</div>
+        <div>${escapeHtml(ev.details || '')}</div>
       </div>
       <div style="font-size:0.72rem; color:#94a3b8;">
         Hardware Netfilter Action: <strong>${ev.stage_s >= 2 || isThreat ? 'Port 8765 Severed (DROP Active)' : 'Normal Packet Forwarding (ACCEPT)'}</strong>
@@ -840,9 +850,9 @@ document.addEventListener('DOMContentLoaded', () => {
           simResultBox.classList.add('pass');
           simResultHeader.textContent = '🟢 TRANSACTION ACCEPTED & QUANTUM-COMMITTED';
           simResultDetails.innerHTML = `
-            <strong>Tx ID:</strong> ${result.tx_id}<br>
+            <strong>Tx ID:</strong> ${escapeHtml(result.tx_id)}<br>
             <strong>Status:</strong> Quantum signature verified (Profile T1). Mismatch p̂=${result.mismatch_rate.toFixed(4)} &lt; τ=${result.tau.toFixed(4)}.<br>
-            <strong>Router Netfilter:</strong> Forwarding allowed on Port 8765 (Channel GREEN). ₹${amount} transferred to ${recipient}.
+            <strong>Router Netfilter:</strong> Forwarding allowed on Port 8765 (Channel GREEN). ₹${escapeHtml(amount)} transferred to ${escapeHtml(recipient)}.
           `;
           showToast(`Test Transaction Passed: ₹${amount} to ${recipient}`);
         } else {
@@ -850,9 +860,9 @@ document.addEventListener('DOMContentLoaded', () => {
           simResultBox.classList.add('drop');
           simResultHeader.textContent = '🔴 TRANSACTION BLOCKED BY HARDWARE/CRYPTOGRAPHIC DEFENSE';
           simResultDetails.innerHTML = `
-            <strong>Blocked By:</strong> ${result.blocked_by || 'POLICY'}<br>
-            <strong>Reason:</strong> ${result.reason}<br>
-            <strong>Action:</strong> ${result.action} on Port 8765 | Router Status: <span style="color:#ef4444">${result.router_status}</span>
+            <strong>Blocked By:</strong> ${escapeHtml(result.blocked_by || 'POLICY')}<br>
+            <strong>Reason:</strong> ${escapeHtml(result.reason)}<br>
+            <strong>Action:</strong> ${escapeHtml(result.action)} on Port 8765 | Router Status: <span style="color:#ef4444">${escapeHtml(result.router_status)}</span>
           `;
           showToast('Test Transaction Blocked!');
         }

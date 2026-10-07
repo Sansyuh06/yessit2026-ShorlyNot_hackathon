@@ -52,8 +52,8 @@ def test_bank_transfers_blocked_when_attack_escalates_stage():
     token = login_resp.cookies["session_token"]
     client.cookies.set("session_token", token)
 
-    # Trigger a forgery attack via SOC
-    atk_resp = client.post("/soc/attack/forgery")
+    # Trigger a forgery attack via SOC with ops authorization
+    atk_resp = client.post("/soc/attack/forgery", headers={"Authorization": "Bearer ops-secret-key-2026"})
     assert atk_resp.status_code == 200
 
     # Verify stage escalated to S2
@@ -91,6 +91,40 @@ def test_soc_unauthenticated_write_rejected():
     atk_resp = client.post("/soc/attack/channel")
     assert atk_resp.status_code == 401
     assert "Authentication Required" in atk_resp.text
+
+
+def test_soc_customer_denied_access():
+    client = TestClient(app)
+    # Log in as ordinary customer alice
+    login_resp = client.post("/login", data={"username": "alice", "password": "alice123"}, follow_redirects=False)
+    token = login_resp.cookies["session_token"]
+    client.cookies.set("session_token", token)
+
+    # Customer accessing /soc page directly must be rejected with 403 Forbidden
+    soc_page_resp = client.get("/soc")
+    assert soc_page_resp.status_code == 403
+    assert "403 Forbidden" in soc_page_resp.text
+
+    # Customer attempting to trigger attack without ops authorization
+    atk_resp = client.post("/soc/attack/forgery")
+    assert atk_resp.status_code == 401
+
+
+def test_invalid_and_self_recipient_rejected():
+    client = TestClient(app)
+    login_resp = client.post("/login", data={"username": "alice", "password": "alice123"}, follow_redirects=False)
+    token = login_resp.cookies["session_token"]
+    client.cookies.set("session_token", token)
+
+    # 1. Transfer to invalid recipient 'system' (money destruction prevention)
+    tx_resp = client.post("/transfer", data={"to_user": "system", "amount": 1000.0})
+    assert "Invalid recipient account" in tx_resp.text
+    assert auth_mgr.users["alice"].balance == 50000.0
+
+    # 2. Self transfer
+    tx_self = client.post("/transfer", data={"to_user": "alice", "amount": 1000.0})
+    assert "Self-transfers are not permitted" in tx_self.text
+    assert auth_mgr.users["alice"].balance == 50000.0
 
 
 def test_bank_nan_amount_rejected():
