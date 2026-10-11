@@ -676,8 +676,10 @@ async def router_execute_command(request: Request):
 @app.get("/api/soc/recalc_bound")
 def soc_recalc_bound(p0: float = 0.02, n: int = 64, delta: float = 0.01):
     """Calculates Hoeffding Bound tau and P_forge for arbitrary parameters."""
-    if n <= 0: n = 64
-    if delta <= 0: delta = 0.01
+    if n <= 0:
+        n = 64
+    if delta <= 0:
+        delta = 0.01
     tau = p0 + math.sqrt(math.log(1.0 / delta) / (2.0 * n))
 
     from shorlynot_skeleton.detect.tau import TauCalculator

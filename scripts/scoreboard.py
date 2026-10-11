@@ -15,7 +15,6 @@ from scipy.special import comb
 from shorlynot_skeleton.pipeline import QuantumTransferPipeline
 from shorlynot_skeleton.models import TransactionPayload, TransferPipelineRequest, TauPreset
 from shorlynot_skeleton.qds.protocol import QdsT1Protocol
-from shorlynot_skeleton.detect.tau import TauCalculator
 
 
 def calculate_binomial_p_forge(n: int, p0: float = 0.02, delta: float = 0.01) -> float:
@@ -77,7 +76,7 @@ def measure_latencies(n_trials: int = 20):
             tau_preset=TauPreset.NORMAL
         )
         t0 = time.perf_counter()
-        res = pipeline.execute_transfer(req)
+        _ = pipeline.execute_transfer(req)
         t1 = time.perf_counter()
         pipe_times.append((t1 - t0) * 1000.0)
 
@@ -132,22 +131,22 @@ def generate_scoreboard():
 
     # 3. Test suite count
     test_count = run_pytest_count()
-    print(f"\n--- Pytest Suite ---")
+    print("\n--- Pytest Suite ---")
     print(f"Total Collected Tests: {test_count}")
 
     print("\n================================================================================")
     print("                        CANONICAL DOC TABLE METRICS                             ")
     print("================================================================================")
-    print(f"| Metric | Value |")
-    print(f"|---|---|")
+    print("| Metric | Value |")
+    print("|---|---|")
     print(f"| Pytest Test Suite | **{test_count} / {test_count} PASSED (100%)** |")
     print(f"| Sign Latency (64 Aer Circuits) | **~{metrics['avg_sign_ms']:.1f} ms** |")
     print(f"| Verify Latency (Born-rule O(n)) | **{metrics['avg_verify_ms']:.3f} ms** (< 1 ms) |")
     print(f"| Full Pipeline Latency | **~{metrics['avg_pipe_ms']:.1f} ms** |")
     print(f"| P_forge (n=64, tau=0.2097) | **{p_forge_64:.2e}** (9.40 x 10^-7) |")
     print(f"| P_forge (n=128, tau=0.1541) | **{p_forge_128:.2e}** (7.78 x 10^-17) |")
-    print(f"| Honest False Reject Budget (delta) | **0.01 (1.0%)** |")
-    print(f"| Decision Ladder | **7-Step Non-ML Deterministic Ladder** |")
+    print("| Honest False Reject Budget (delta) | **0.01 (1.0%)** |")
+    print("| Decision Ladder | **7-Step Non-ML Deterministic Ladder** |")
     print("================================================================================")
 
 

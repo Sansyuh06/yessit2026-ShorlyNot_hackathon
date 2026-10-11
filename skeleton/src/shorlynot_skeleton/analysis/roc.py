@@ -91,16 +91,23 @@ def validate_against_engine(n: int = 64, p0: float = 0.02, trials: int = 300, se
         total = n * trials
         for _ in range(trials):
             for _ in range(n):
-                bit = int(rng.integers(0, 2)); basis = int(rng.integers(0, 2))
+                bit = int(rng.integers(0, 2))
+                basis = int(rng.integers(0, 2))
                 true_syn = (int(rng.integers(0, 2)), int(rng.integers(0, 2)))
                 prov = provided_fn(true_syn)
                 wrong += int(eng.simulate_bob_verification(bit, basis, true_syn, prov, True) != bit)
         return wrong / total
 
     f, r = 0.5, 0.3
-    guess = lambda t: (int(rng.integers(0, 2)), int(rng.integers(0, 2)))
-    partial = lambda t: t if rng.random() < f else guess(t)
-    tamper = lambda t: (t[0] ^ int(rng.random() < r), t[1] ^ int(rng.random() < r))
+
+    def guess(t):
+        return (int(rng.integers(0, 2)), int(rng.integers(0, 2)))
+
+    def partial(t):
+        return t if rng.random() < f else guess(t)
+
+    def tamper(t):
+        return (t[0] ^ int(rng.random() < r), t[1] ^ int(rng.random() < r))
     return {
         "honest_measured": measured_rate(lambda t: t), "honest_theory": p0 / 2,
         "guess_measured": measured_rate(guess), "guess_theory": 0.5,

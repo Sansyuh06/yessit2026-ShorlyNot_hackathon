@@ -5,10 +5,10 @@ SIH 2026 PS 26141.
 
 import pytest
 
-pennylane = pytest.importorskip("pennylane")
-
 from shorlynot_skeleton.engines.pennylane_engine import PennyLaneEngine
 from shorlynot_skeleton.engines.qiskit_aer import QiskitAerEngine
+
+pennylane = pytest.importorskip("pennylane")
 
 
 class TestPennyLaneEngine:

@@ -51,7 +51,8 @@ def test_persistence_roundtrip_and_tamper_on_disk(tmp_path):
         log.append({"i": i})
     assert HashChainedLog(str(path)).verify() == (True, None)
     lines = path.read_text().splitlines()
-    rec = json.loads(lines[1]); rec["payload"]["i"] = 99
+    rec = json.loads(lines[1])
+    rec["payload"]["i"] = 99
     lines[1] = json.dumps(rec, sort_keys=True)
     path.write_text("\n".join(lines) + "\n")
     assert HashChainedLog(str(path)).verify() == (False, 1)
