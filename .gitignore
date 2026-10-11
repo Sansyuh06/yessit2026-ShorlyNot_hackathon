@@ -51,4 +51,9 @@ scratch/
 *.mp4
 *.m4a
 *.webm
+*.exe
+*.zip
+scoped_dir*/
+docs/Final docs/
+
 

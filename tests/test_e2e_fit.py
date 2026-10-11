@@ -5,7 +5,7 @@ SIH 2026 PS 26141.
 This script runs the EXACT fit test the user specified:
 1. Alice transfers Rs 5,000 to Bob -> works
 2. Trigger forgery attack -> caught, stage escalates
-3. Alice tries another transfer -> BLOCKED by security policy
+3. Attacker's source is BLOCKED; Alice (the named victim) is NOT locked out
 4. Replay attack -> caught
 5. Reset and re-verify honest transfer works again
 
@@ -38,6 +38,7 @@ class TestE2EFitTest:
         to_user: str = "bob",
         amount: float = 5000.0,
         attack: str = None,
+        source_id: str = None,
     ) -> TransferPipelineRequest:
         tx = TransactionPayload(
             from_user=from_user,
@@ -52,6 +53,7 @@ class TestE2EFitTest:
             verifier_id=to_user,
             tau_preset=TauPreset.NORMAL,
             simulate_attack=attack,
+            source_id=source_id,
         )
 
     # -- Fit Test Scenario ------------------------------------------------
@@ -79,21 +81,23 @@ class TestE2EFitTest:
         assert result.stage_s.value >= StageS.S2.value
         print(f"  [FORGERY] Caught: p_hat={result.verify_result.mismatch_rate:.4f} > tau={result.verify_result.tau:.4f} -> Stage S{result.stage_s.value}")
 
-    def test_fit_test_bank_blocks_after_forgery(self):
-        """Step 3: After forgery, honest transfer is BLOCKED."""
-        # First: trigger forgery to escalate stage
-        atk_req = self._make_transfer_request(attack="forgery")
+    def test_fit_test_bank_blocks_attacker_not_victim(self):
+        """Step 3: After forgery, the ATTACKER's source is blocked and the named victim is not."""
+        atk_req = self._make_transfer_request(attack="forgery", source_id="203.0.113.9")
         atk_result = self.pipeline.execute_transfer(atk_req)
         assert atk_result.success is False
         assert atk_result.stage_s.value >= StageS.S2.value
 
-        # Now: honest transfer should be blocked by security policy
-        honest_req = self._make_transfer_request(amount=1000.0)
-        honest_result = self.pipeline.execute_transfer(honest_req)
+        # Alice (named in the forged bundle) keeps working from her own origin
+        victim_req = self._make_transfer_request(amount=1000.0, source_id="198.51.100.7")
+        assert self.pipeline.execute_transfer(victim_req).success is True
 
-        assert honest_result.success is False, "Transfer after attack should be blocked"
-        assert honest_result.status_code in (403, 423), f"Expected 403/423, got {honest_result.status_code}"
-        print(f"  [BLOCKED] Bank refused transfer: {honest_result.message}")
+        # Anything from the attacker's source is refused, even with a valid-looking request
+        attacker_req = self._make_transfer_request(amount=1000.0, source_id="203.0.113.9")
+        blocked = self.pipeline.execute_transfer(attacker_req)
+        assert blocked.success is False
+        assert blocked.status_code in (403, 423), f"Expected 403/423, got {blocked.status_code}"
+        print(f"  [BLOCKED] Bank refused attacker source: {blocked.message}")
 
     def test_fit_test_replay_detected(self):
         """Step 4: Replay attack -> nonce duplicate detected."""
@@ -128,23 +132,23 @@ class TestE2EFitTest:
         print(f"  [1] Honest: p_hat={r1.verify_result.mismatch_rate:.4f} <= tau={r1.verify_result.tau:.4f} OK")
 
         # 2. Forgery attack
-        req2 = self._make_transfer_request(amount=9999.0, attack="forgery")
+        req2 = self._make_transfer_request(amount=9999.0, attack="forgery", source_id="203.0.113.9")
         r2 = self.pipeline.execute_transfer(req2)
         assert r2.success is False
         assert r2.threat_classification.label == ThreatLabel.FORGERY
         print(f"  [2] Forgery: p_hat={r2.verify_result.mismatch_rate:.4f} > tau={r2.verify_result.tau:.4f} CAUGHT")
 
-        # 3. Honest transfer blocked
-        req3 = self._make_transfer_request(amount=1000.0)
+        # 3. Attacker's source blocked
+        req3 = self._make_transfer_request(amount=1000.0, source_id="203.0.113.9")
         r3 = self.pipeline.execute_transfer(req3)
         assert r3.success is False
         print(f"  [3] Blocked: {r3.message}")
 
-        # 4. Reset stages and verify honest transfer works again
+        # 4. Reset stages and verify the previously blocked source works again
         self.pipeline.stage_machine.reset()
         self.pipeline.classifier.clear_replay_cache()
 
-        req4 = self._make_transfer_request(amount=2000.0)
+        req4 = self._make_transfer_request(amount=2000.0, source_id="203.0.113.9")
         r4 = self.pipeline.execute_transfer(req4)
         assert r4.success is True
         print(f"  [4] After reset: p_hat={r4.verify_result.mismatch_rate:.4f} <= tau={r4.verify_result.tau:.4f} OK")

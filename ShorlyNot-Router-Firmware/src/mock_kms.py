@@ -497,8 +497,6 @@ class MockKMSHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_POST(self):
-        self.do_GET()
 
 
 def auto_demo_worker():

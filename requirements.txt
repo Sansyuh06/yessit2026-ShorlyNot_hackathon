@@ -13,3 +13,7 @@ scipy>=1.12.0
 reportlab>=4.0.0
 pytest>=8.0.0
 pennylane>=0.35.0
+kyber-py>=1.0.0
+dilithium-py>=1.0.0
+matplotlib>=3.8.0
+flask>=3.0.0

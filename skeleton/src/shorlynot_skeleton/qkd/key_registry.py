@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from shorlynot_skeleton.qkd.bb84 import Bb84Simulator
+from shorlynot_skeleton.pqc import identity as pqc_identity
 
 
 class KeyRecord(BaseModel):
@@ -24,6 +25,7 @@ class KeyRecord(BaseModel):
     qber: float = 0.02
     created_at: float = Field(default_factory=time.time)
     status: str = "active"
+    dsa_public_key: str = ""  # hex ML-DSA-44 public key (identity binding)
 
 
 class QuantumKeyRegistry:
@@ -35,7 +37,38 @@ class QuantumKeyRegistry:
         self._keys: Dict[str, KeyRecord] = {}
         self._user_to_keys: Dict[str, List[str]] = {}
         self._simulator = Bb84Simulator()
+        # Demo keystore: in production the secret half lives in the signer's HSM/device,
+        # never in the verifier's registry.
+        self._dsa_secret: Dict[str, bytes] = {}
         self._seed_default_keys()
+
+    def _new_identity_key(self, key_id: str) -> str:
+        pk, sk = pqc_identity.keygen()
+        self._dsa_secret[key_id] = sk
+        return pk.hex()
+
+    def sign_identity(self, key_id: str, message: bytes) -> Optional[str]:
+        sk = self._dsa_secret.get(key_id)
+        return pqc_identity.sign(sk, message).hex() if sk else None
+
+    def verify_identity(self, key_id: str, message: bytes, sig_hex: Optional[str]) -> bool:
+        rec = self._keys.get(key_id)
+        if not rec or not rec.dsa_public_key or not sig_hex or rec.status != "active":
+            return False
+        try:
+            return pqc_identity.verify(bytes.fromhex(rec.dsa_public_key), message, bytes.fromhex(sig_hex))
+        except ValueError:
+            return False
+
+    def identify_signer(self, message: bytes, sig_hex: Optional[str]) -> Optional[str]:
+        """Return the registered key_id whose public key verifies this signature, if any.
+        Cryptographic attribution: used to find who really signed an impersonated bundle."""
+        if not sig_hex:
+            return None
+        for key_id in self._keys:
+            if self.verify_identity(key_id, message, sig_hex):
+                return key_id
+        return None
 
     def _seed_default_keys(self) -> None:
         """Seed initial key bindings for demo accounts."""
@@ -56,7 +89,8 @@ class QuantumKeyRegistry:
                 qkd_session_id=qkd_res.session_id,
                 key_fingerprint=f"QKD-SHA256:{fingerprint}",
                 qber=qkd_res.qber,
-                status="active"
+                status="active",
+                dsa_public_key=self._new_identity_key(key_id)
             )
             self._keys[key_id] = record
             self._user_to_keys.setdefault(user_id, []).append(key_id)
@@ -81,7 +115,8 @@ class QuantumKeyRegistry:
             qkd_session_id=qkd_res.session_id,
             key_fingerprint=f"QKD-SHA256:{fingerprint}",
             qber=qkd_res.qber,
-            status="active"
+            status="active",
+            dsa_public_key=self._new_identity_key(key_id)
         )
         self._keys[key_id] = record
         self._user_to_keys.setdefault(user_id, []).append(key_id)

@@ -1,6 +1,8 @@
 from typing import Optional
 from shorlynot_skeleton.models import SignatureBundle
 from shorlynot_skeleton.qds.protocol import QdsT1Protocol
+from shorlynot_skeleton.qkd.key_registry import GLOBAL_KEY_REGISTRY
+from shorlynot_skeleton.pqc.identity import identity_message
 
 
 class ImpersonationAttack:
@@ -26,7 +28,12 @@ class ImpersonationAttack:
         )
         # Then claims to be Alice by setting bundle.key_id = claimed_key_id
         bundle.key_id = claimed_key_id
-        bundle.measurement_transcript["actual_signer"] = attacker_key_id
+        # Eve can only sign with the identity key she actually holds. No self-incriminating label is set:
+        # the verifier has to catch her from the signature alone.
+        bundle.identity_sig = GLOBAL_KEY_REGISTRY.sign_identity(
+            attacker_key_id,
+            identity_message(bundle.payload_hash, bundle.nonce, claimed_key_id, bundle.n_checks, bundle.L)
+        )
         bundle.measurement_transcript["attack"] = "impersonation"
         return bundle
 

@@ -17,6 +17,7 @@ from shorlynot_skeleton.models import (
 )
 from shorlynot_skeleton.qds.sessions import GLOBAL_ENTANGLEMENT_STORE
 from shorlynot_skeleton.qkd.key_registry import GLOBAL_KEY_REGISTRY
+from shorlynot_skeleton.pqc.identity import identity_message
 
 
 class QstdfClassifier:
@@ -116,7 +117,8 @@ class QstdfClassifier:
         verify_result: VerifyResult,
         claimed_signer: Optional[str] = None,
         verifier_id: str = "bob",
-        pqc_unprotect_success: bool = True
+        pqc_unprotect_success: bool = True,
+        require_identity_sig: bool = False
     ) -> ThreatClassification:
         """
         Evaluate signature verification against the strict blind Q-STDF decision ladder.
@@ -151,6 +153,12 @@ class QstdfClassifier:
         # Check session-origin binding if session exists on Bob's side
         session = GLOBAL_ENTANGLEMENT_STORE.get_session(bundle.nonce)
         if session and session.key_id != bundle.key_id:
+            # Attribution only from cryptographic evidence: which registered key verifies the signature?
+            attributed = None
+            if bundle.identity_sig:
+                attributed = GLOBAL_KEY_REGISTRY.identify_signer(
+                    identity_message(bundle.payload_hash, bundle.nonce, bundle.key_id, bundle.n_checks, bundle.L),
+                    bundle.identity_sig)
             return ThreatClassification(
                 label=ThreatLabel.IMPERSONATION,
                 passed=False,
@@ -161,10 +169,36 @@ class QstdfClassifier:
                 n=n,
                 delta=delta,
                 stage_s_recommendation=StageS.S2,
-                details={"claimed_signer": claimed_signer, "claimed_key": bundle.key_id, "session_key": session.key_id, "step": 2}
+                details={"claimed_signer": claimed_signer, "claimed_key": bundle.key_id, "session_key": session.key_id,
+                         "attributed_key": attributed, "step": 2}
             )
 
-        actual_signer = bundle.measurement_transcript.get("actual_signer")
+        # Cryptographic identity check (ML-DSA-44). Evidence comes from the signature, never from
+        # labels inside the bundle. A bad signature under the claimed key is impersonation, and the
+        # real signer is attributed by trying the registered public keys.
+        unsigned = False
+        if require_identity_sig:
+            id_msg = identity_message(bundle.payload_hash, bundle.nonce, bundle.key_id, bundle.n_checks, bundle.L)
+            if bundle.identity_sig:
+                if not GLOBAL_KEY_REGISTRY.verify_identity(bundle.key_id, id_msg, bundle.identity_sig):
+                    attributed = GLOBAL_KEY_REGISTRY.identify_signer(id_msg, bundle.identity_sig)
+                    return ThreatClassification(
+                        label=ThreatLabel.IMPERSONATION,
+                        passed=False,
+                        reason=f"Impersonation detected: identity signature does not verify under claimed key '{bundle.key_id}'.",
+                        mismatch_rate=mismatch_rate,
+                        tau=tau,
+                        p0=p0,
+                        n=n,
+                        delta=delta,
+                        stage_s_recommendation=StageS.S2,
+                        details={"claimed_signer": claimed_signer, "claimed_key": bundle.key_id,
+                                 "attributed_key": attributed, "step": 2}
+                    )
+            else:
+                unsigned = True
+
+        actual_signer = None if require_identity_sig else bundle.measurement_transcript.get("actual_signer")
         if actual_signer and actual_signer != bundle.key_id:
             return ThreatClassification(
                 label=ThreatLabel.IMPERSONATION,
@@ -266,6 +300,20 @@ class QstdfClassifier:
         # -------------------------------------------------------------
         # STEP 6: FORGERY (Hoeffding Statistical Threshold Check)
         # -------------------------------------------------------------
+        if unsigned:
+            return ThreatClassification(
+                label=ThreatLabel.FORGERY,
+                passed=False,
+                reason="Bundle carries no identity signature. Unauthenticated signature material is rejected.",
+                mismatch_rate=mismatch_rate,
+                tau=tau,
+                p0=p0,
+                n=n,
+                delta=delta,
+                stage_s_recommendation=StageS.S2,
+                details={"unsigned": True, "step": 6}
+            )
+
         if mismatch_rate > tau:
             return ThreatClassification(
                 label=ThreatLabel.FORGERY,

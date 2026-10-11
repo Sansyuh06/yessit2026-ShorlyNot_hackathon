@@ -153,7 +153,8 @@ class QdsT1Protocol:
         p0: Optional[float] = None,
         override_syndromes: Optional[List[List[int]]] = None,
         mode: str = "analytic",
-        min_required_n: int = MIN_SECURE_N
+        min_required_n: int = MIN_SECURE_N,
+        threshold_mode: str = "hoeffding"
     ) -> VerifyResult:
         """
         Verify a ShorlyNot-QDS-T1 signature bundle.
@@ -268,7 +269,11 @@ class QdsT1Protocol:
         mismatch_rate = float(mismatches) / float(n) if n > 0 else 1.0
 
         # Hoeffding threshold: tau = p0 + sqrt(ln(1/delta) / (2n))
-        tau = noise_floor + np.sqrt(np.log(1.0 / reject_budget) / (2.0 * n))
+        if threshold_mode == "exact":
+            from shorlynot_skeleton.detect.tau import TauCalculator
+            tau = TauCalculator.calculate_tau_exact(p0=noise_floor, delta=reject_budget, n=n)
+        else:
+            tau = noise_floor + np.sqrt(np.log(1.0 / reject_budget) / (2.0 * n))
         candidate_accepted = bool(mismatch_rate <= tau)
         t_end = time.perf_counter()
 

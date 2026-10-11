@@ -100,7 +100,8 @@ def run_attack_demonstration() -> bool:
         signer_key_id="alice-key-1",
         verifier_id="bob",
         tau_preset=TauPreset.NORMAL,
-        simulate_attack="forgery"
+        simulate_attack="forgery",
+        source_id="203.0.113.9"
     )
     res_forge = pipeline.execute_transfer(req_forge)
 
@@ -128,18 +129,19 @@ def run_attack_demonstration() -> bool:
         currency="INR",
         tx_id="tx-blocked-demo-3"
     )
-    req_blocked = TransferPipelineRequest(
-        transaction=tx_blocked,
-        signer_key_id="alice-key-1",
-        verifier_id="bob"
-    )
-    res_blocked = pipeline.execute_transfer(req_blocked)
+    # The attacker's origin is refused. Alice, the identity the forger CLAIMED, is not locked out.
+    res_blocked = pipeline.execute_transfer(TransferPipelineRequest(
+        transaction=tx_blocked, signer_key_id="alice-key-1", verifier_id="bob", source_id="203.0.113.9"))
+    tx_victim = TransactionPayload(
+        from_user="alice", to_user="bob", amount=500.0, currency="INR", tx_id="tx-victim-demo-3")
+    res_victim = pipeline.execute_transfer(TransferPipelineRequest(
+        transaction=tx_victim, signer_key_id="alice-key-1", verifier_id="bob", source_id="198.51.100.7"))
 
-    if not res_blocked.success and res_blocked.status_code == 403:
-        print(f"  [PASS] 3. Bank App Enforcement: Active (New transfers rejected HTTP 403 without iptables / OS tampering)")
+    if not res_blocked.success and res_blocked.status_code == 403 and res_victim.success:
+        print(f"  [PASS] 3. Bank App Enforcement: attacker source refused (HTTP 403); named victim Alice keeps transacting")
         passed_steps += 1
     else:
-        print(f"  [FAIL] 3. Bank App Enforcement failed to block transfer under Stage S2!")
+        print(f"  [FAIL] 3. Enforcement must block the attacker source and spare the victim!")
         return False
 
     # -------------------------------------------------------------------------
@@ -255,9 +257,11 @@ def run_attack_demonstration() -> bool:
         not res_imp.success
         and res_imp.threat_classification.label == ThreatLabel.IMPERSONATION
         and res_imp.signature_bundle.key_id == "alice-key-1"
-        and res_imp.signature_bundle.measurement_transcript.get("actual_signer") == "eve-key-1"
+        and res_imp.threat_classification.details.get("attributed_key") == "eve-key-1"
+        and "eve" in pipeline.stage_machine.get_state().quarantined_accounts
+        and "alice" not in pipeline.stage_machine.get_state().quarantined_accounts
     ):
-        print(f"  [PASS] 7. Impersonation Attack: Caught (Eve key hardware attestation flagged -> Stage S{res_imp.stage_s.value})")
+        print(f"  [PASS] 7. Impersonation Attack: Caught; ML-DSA signature attributes the bundle to eve-key-1, only Eve is quarantined (Stage S{res_imp.stage_s.value})")
         passed_steps += 1
     else:
         print(f"  [FAIL] 7. Impersonation detection failed!")

@@ -152,7 +152,8 @@ class SkeletonServiceClient:
             signer_key_id="alice-key-1",
             verifier_id="bob",
             tau_preset=TauPreset.NORMAL,
-            simulate_attack=attack_type
+            simulate_attack=attack_type,
+            source_id="demo-attacker"
         )
         return self.shared_pipeline.execute_transfer(pipe_req)
 

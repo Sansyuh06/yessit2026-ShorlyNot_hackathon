@@ -71,6 +71,7 @@ class SignatureBundle(BaseModel):
     backend: QuantumBackend = Field(default=QuantumBackend.SIM, description="Backend used (sim|ibm)")
     engine: QuantumEngine = Field(default=QuantumEngine.QISKIT, description="Quantum engine (qiskit)")
     pqc_mode: str = Field(default="aes-gcm-demo", description="PQC wrapper mode")
+    identity_sig: Optional[str] = Field(default=None, description="Hex ML-DSA-44 signature over the bundle header, verified against the registered public key")
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="ISO-8601 timestamp")
     n_checks: int = Field(default=64, description="Number of check positions verified")
     L: int = Field(default=128, description="Total signature block length")
@@ -142,6 +143,7 @@ class TransferPipelineRequest(BaseModel):
     tau_preset: TauPreset = TauPreset.NORMAL
     backend: QuantumBackend = QuantumBackend.SIM
     simulate_attack: Optional[str] = None  # None | forgery | impersonation | replay | unauth_verify | channel
+    source_id: Optional[str] = None  # network/session origin of the request (IP, device); used for attribution
 
 
 class PipelineResult(BaseModel):
@@ -199,6 +201,7 @@ class StageState(BaseModel):
     bank_locked: bool = False
     lock_scope: str = "none"  # none | account | global
     quarantined_accounts: List[str] = Field(default_factory=list)
+    quarantined_sources: List[str] = Field(default_factory=list)
     events_count: int = 0
 
 

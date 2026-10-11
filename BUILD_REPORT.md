@@ -7,7 +7,7 @@ System verification and acceptance testing report for the ShorlyNot framework.
 | Product Version | 3.0.0 |
 | Protocol | ShorlyNot-QDS-T1 |
 | Detection Engine | Q-STDF (Hoeffding Statistical Bounds) |
-| Test Suite | 52 / 52 PASSED (100%) |
+| Test Suite | 80 / 80 PASSED (100%) |
 | Sign Latency (64 Aer Circuits) | ~82.3 ms |
 | Verification Latency | 0.923 ms ($\mathcal{O}(n)$ exact Born-rule) |
 | Full Pipeline Transfer Latency | ~86.9 ms |

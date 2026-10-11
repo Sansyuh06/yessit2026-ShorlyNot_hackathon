@@ -14,7 +14,8 @@ from shorlynot_skeleton.models import (
     PipelineResult,
     ThreatClassification,
     ThreatLabel,
-    StageS
+    StageS,
+    StageQ
 )
 from shorlynot_skeleton.qds.protocol import QdsT1Protocol
 from shorlynot_skeleton.qkd.bb84 import Bb84Simulator
@@ -25,6 +26,9 @@ from shorlynot_skeleton.stages.state_machine import StageStateMachine
 from shorlynot_skeleton.attacks.forgery import ForgeryAttack
 from shorlynot_skeleton.attacks.impersonation import ImpersonationAttack
 from shorlynot_skeleton.qkd.key_registry import GLOBAL_KEY_REGISTRY
+from shorlynot_skeleton.pqc.kem_interface import MlKem768Interface
+from shorlynot_skeleton.pqc.hybrid import derive_hybrid_key
+from shorlynot_skeleton.pqc.identity import identity_message
 from shorlynot_skeleton.attacks.unauth_verify import UnauthVerifyAttack
 from shorlynot_skeleton.attacks.channel import ChannelTamperingAttack
 from shorlynot_skeleton.attacks.param_tamper import ParameterTamperingAttack
@@ -47,6 +51,8 @@ class QuantumTransferPipeline:
         _nonce_db = os.environ.get("SHORLYNOT_NONCE_DB") or "shorlynot_nonces.db"
         self.classifier = classifier or QstdfClassifier(db_path=_nonce_db)
         self.stage_machine = stage_machine or StageStateMachine()
+        # Verifier's long-term ML-KEM-768 keypair (FIPS 203). Signer encapsulates per transfer.
+        self._kem_pk, self._kem_sk = MlKem768Interface.keypair()
 
     def execute_transfer(self, request: TransferPipelineRequest) -> PipelineResult:
         """
@@ -72,7 +78,7 @@ class QuantumTransferPipeline:
         # Check if active transfers allowed under current stage S
         current_state = self.stage_machine.get_state()
         actor = tx.from_user
-        if self.stage_machine.is_actor_blocked(actor):
+        if self.stage_machine.is_actor_blocked(actor, request.source_id):
             t_end = time.perf_counter()
             if current_state.lock_scope == "account":
                 reason = f"Account quarantine active for {actor} (Stage S{current_state.stage_s.value})"
@@ -116,9 +122,20 @@ class QuantumTransferPipeline:
             backend=request.backend
         )
 
-        # Step 3: PQC Wrap of Pauli correction bits
-        protected_corrections = CorrectionBitProtector.protect(bundle.correction_bits, qkd_result.session_key)
+        # Identity binding: ML-DSA-44 signature over the bundle header, under the signer's registered key
+        bundle.identity_sig = GLOBAL_KEY_REGISTRY.sign_identity(
+            signer_key,
+            identity_message(bundle.payload_hash, bundle.nonce, bundle.key_id, bundle.n_checks, bundle.L)
+        )
+
+        # Step 3: PQC Wrap of Pauli correction bits.
+        # Wrap key = HKDF(BB84 key || ML-KEM-768 shared secret): secure if either ingredient holds.
+        kem_ct, kem_ss_signer = MlKem768Interface.encapsulate(self._kem_pk)
+        wrap_key_signer = derive_hybrid_key(qkd_result.session_key, kem_ss_signer)
+        protected_corrections = CorrectionBitProtector.protect(bundle.correction_bits, wrap_key_signer)
         bundle.protected_corrections = protected_corrections
+        bundle.pqc_mode = "ml-kem-768+bb84+aes-256-gcm"
+        bundle.measurement_transcript["kem_ciphertext_hex"] = kem_ct.hex()
 
         # Handle Attack Injections for Live Demonstrations
         verifier_id = request.verifier_id
@@ -151,9 +168,18 @@ class QuantumTransferPipeline:
         pqc_success = True
         unwrapped_bits = bundle.correction_bits
         if bundle.protected_corrections:
+            # Verifier side: decapsulate the transmitted KEM ciphertext, rebuild the hybrid key.
+            try:
+                kem_ss_verifier = MlKem768Interface.decapsulate(
+                    bytes.fromhex(bundle.measurement_transcript.get("kem_ciphertext_hex", "")),
+                    self._kem_sk
+                )
+                wrap_key_verifier = derive_hybrid_key(qkd_result.session_key, kem_ss_verifier)
+            except Exception:
+                wrap_key_verifier = b"\x00" * 32  # unwrap will fail authentication
             pqc_success, unwrapped = CorrectionBitProtector.unprotect(
                 bundle.protected_corrections,
-                qkd_result.session_key
+                wrap_key_verifier
             )
             if pqc_success and unwrapped is not None:
                 unwrapped_bits = unwrapped
@@ -175,34 +201,40 @@ class QuantumTransferPipeline:
             verify_result=verify_result,
             claimed_signer=claimed_signer,
             verifier_id=verifier_id,
-            pqc_unprotect_success=pqc_success
+            pqc_unprotect_success=pqc_success,
+            require_identity_sig=True
         )
 
         # Step 7: Update Security Stage State Machine
-        # Secure quarantine policy: Target the authenticated/actual adversary, NEVER the innocent claimed victim!
-        quarantine_actor = claimed_signer
-        if classification.label in (ThreatLabel.IMPERSONATION, ThreatLabel.FORGERY):
-            actual_key = bundle.measurement_transcript.get("actual_signer")
-            if actual_key and actual_key != bundle.key_id:
-                reg_record = GLOBAL_KEY_REGISTRY.get_key(actual_key)
-                quarantine_actor = reg_record.user_id if reg_record else actual_key
-            elif request.simulate_attack == "impersonation":
-                quarantine_actor = "eve"
+        # Response policy: punish only what the evidence proves.
+        #  - attributed_actor: an account whose registered ML-DSA key verifiably produced the bundle
+        #    (e.g. the real signer behind an impersonation). Never the claimed victim.
+        #  - source_id: the network/session origin of the request.
+        #  - link_evidence: elevated QBER measured on the physical link (not sender-controlled).
+        attributed_actor = None
+        if classification.label == ThreatLabel.IMPERSONATION:
+            attributed_key = (classification.details or {}).get("attributed_key")
+            if attributed_key:
+                reg_record = GLOBAL_KEY_REGISTRY.get_key(attributed_key)
+                attributed_actor = reg_record.user_id if reg_record else attributed_key
 
         stage_s = self.stage_machine.process_threat_verdict(
             label=classification.label,
             mismatch_rate=verify_result.mismatch_rate,
             tau=verify_result.tau,
             tx_id=tx.tx_id,
-            actor=quarantine_actor,
-            details=f"Tx ₹{tx.amount} to {tx.to_user}: {classification.reason}"
+            actor=claimed_signer,
+            details=f"Tx ₹{tx.amount} to {tx.to_user}: {classification.reason}",
+            attributed_actor=attributed_actor,
+            source_id=request.source_id,
+            link_evidence=stage_q.value >= StageQ.Q3.value
         )
 
         t_end = time.perf_counter()
         total_time_ms = round((t_end - t_start) * 1000, 3)
 
         # Step 8: Final Bank Authorization Decision
-        success = classification.passed and not self.stage_machine.is_actor_blocked(claimed_signer)
+        success = classification.passed and not self.stage_machine.is_actor_blocked(claimed_signer, request.source_id)
         status_code = 200 if success else (403 if stage_s.value < StageS.S4.value else 423)
         message = "Transfer successfully signed, verified, and committed to ledger." if success else classification.reason
 

@@ -39,7 +39,9 @@ def test_impersonation_attack_vector():
     assert res.success is False
     assert res.threat_classification.label == ThreatLabel.IMPERSONATION
     assert res.signature_bundle.key_id == "alice-key-1"
-    assert res.signature_bundle.measurement_transcript.get("actual_signer") == "eve-key-1"
+    # Detection is blind: no self-reported label exists in the bundle, and the real signer is
+    # attributed cryptographically from the ML-DSA signature.
+    assert "actual_signer" not in res.signature_bundle.measurement_transcript
     assert res.stage_s >= StageS.S2
 
 

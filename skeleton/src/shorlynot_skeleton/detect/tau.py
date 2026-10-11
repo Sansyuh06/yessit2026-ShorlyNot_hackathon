@@ -55,6 +55,30 @@ class TauCalculator:
         t = np.sqrt(np.log(1.0 / delta) / (2.0 * n))
         return float(p0 + t)
 
+    @staticmethod
+    def honest_mismatch_rate(p0: float) -> float:
+        """Per-position honest mismatch probability under depolarizing noise p0.
+        The model gives P(wrong bit) = p0 / 2 (the depolarizing channel randomises the bit w.p. p0)."""
+        return p0 / 2.0
+
+    @classmethod
+    def calculate_tau_exact(cls, p0: float = 0.02, delta: float = 0.01, n: int = 64) -> float:
+        """
+        Exact-binomial acceptance threshold: the smallest k such that an honest signature
+        (mismatches ~ Binomial(n, p0/2)) exceeds k with probability <= delta, returned as k / n.
+        Same false-reject guarantee as Hoeffding, but far tighter, because Hoeffding ignores the
+        low variance of a rare-event binomial.
+        """
+        if delta <= 0 or delta >= 1:
+            raise ValueError(f"Delta budget must be in (0, 1), got {delta}")
+        if n <= 0:
+            raise ValueError(f"Check count n must be > 0, got {n}")
+        q = cls.honest_mismatch_rate(p0)
+        k = int(binom.ppf(1.0 - delta, n, q))
+        while binom.sf(k, n, q) > delta:
+            k += 1
+        return k / n
+
     @classmethod
     def get_preset_tau(cls, preset: TauPreset, n: int = 64, p0: float = 0.02) -> float:
         config = cls.PRESETS.get(preset, cls.PRESETS[TauPreset.NORMAL])

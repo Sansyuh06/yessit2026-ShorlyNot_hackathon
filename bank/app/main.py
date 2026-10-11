@@ -185,15 +185,22 @@ def handle_transfer(
     # Stage S2+ Check
     actor = user.username
     if stage_state.stage_s.value >= 2:
+        client_host = request.client.host if request.client else None
         account_quarantined = (
             stage_state.lock_scope == "account"
-            and actor in (stage_state.quarantined_accounts or [])
+            and (
+                actor in (stage_state.quarantined_accounts or [])
+                or (client_host is not None and client_host in (stage_state.quarantined_sources or []))
+            )
         )
-        global_blocked = stage_state.lock_scope != "account"
+        global_blocked = (
+            stage_state.lock_scope != "account"
+            or not stage_state.quarantined_accounts
+        )
         if global_blocked or account_quarantined:
             error = (
                 f"Your account is quarantined (Stage S{stage_state.stage_s.value})."
-                if account_quarantined
+                if account_quarantined and not global_blocked
                 else f"New transfers suspended by security policy (Stage S{stage_state.stage_s.value})."
             )
             return templates.TemplateResponse(

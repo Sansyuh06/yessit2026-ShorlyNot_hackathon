@@ -5,12 +5,15 @@
 
 ---
 
-## 1. Global Gateway Stage Lock vs. Per-Account Lockdown
+## 1. Who Gets Blocked: Attribution-Based Response
 
-- **Enforced Architecture**: The `StageStateMachine` implements a severity × scope escalation model. A single signature forgery or impersonation violation immediately quarantines the affected account (`lock_scope = "account"`), adding the offending actor to `quarantined_accounts`.
-- **Scope-Aware Enforcement**: Pipeline and banking transfer gates (`is_actor_blocked`) enforce this quarantine by rejecting transfers from quarantined actors while allowing unaffected accounts to continue transacting normally, preventing single-request global denial-of-service (DoS).
-- **Escalation to Global Lockdown**: Repeated or correlated attacks under S2/S3, direct quantum channel compromise (eavesdropping/QBER spike), or security parameter downgrade attacks escalate to `lock_scope = "global"` (full S4 gateway lockdown), blocking all users across the bank.
-- **Demo & SOC Visibility**: The live demonstration executes this exact scope-aware path; the SOC dashboard displays active lock scope and explicitly highlights which specific accounts are quarantined.
+- **Principle**: the response touches only what the evidence proves. The identity a request *claims* is never punished, because anyone can type a victim's name.
+- **Account quarantine** applies only to an account proven by an ML-DSA-44 signature (for example the real signer behind an impersonated bundle).
+- **Source quarantine** applies to the request origin (`source_id`) for unauthenticated events (forgery, replay, parameter tampering).
+- **Global scope and S4** require evidence the sender cannot forge (measured QBER on the link) or a streak of three attributed violations. Unauthenticated events are capped at S3 with account scope.
+- **Recovery**: the stage decays one level per quiet interval (default 300 s, `SHORLYNOT_DECAY_SECONDS`, 0 disables). Quarantines expire when the stage drops below S2. Manual admin reset still exists.
+- **Not implemented**: per-source rate limiting, risk scoring by transaction value, and a human approval flow.
+- **Audit**: every stage event is appended to a SHA-256 hash chain (`GET /v1/audit/verify`). Tail truncation is detectable only against an externally anchored head hash.
 
 ---
 
@@ -29,10 +32,11 @@
 
 ---
 
-## 4. PQC Layer (AES-256-GCM Demo Wrap with ML-KEM Interface)
+## 4. PQC Layer (Real ML-KEM-768 and ML-DSA-44, Reference Implementations)
 
-- **Current Architecture**: Classical Pauli correction bits are encrypted via AES-256-GCM using 256-bit symmetric session keys derived from the BB84 QKD link layer.
-- **ML-KEM Interface**: Provided as `MlKem768Interface` in `pqc/kem_interface.py` to allow drop-in replacement with NIST FIPS 203 ML-KEM packages when available.
+- **Wrap key**: HKDF over the BB84 session key and an ML-KEM-768 (FIPS 203) shared secret. The syndrome bits are protected with AES-256-GCM under that hybrid key.
+- **Identity**: each registered key has an ML-DSA-44 (FIPS 204) public key. The bundle header is signed, and verification attributes impersonated bundles to the real signer.
+- **Caveats**: `kyber-py` and `dilithium-py` are pure-Python reference implementations and are not constant-time. Swap in liboqs for production. The demo keystore keeps signer secret keys inside the verifier process. BB84 itself is simulated in-process.
 
 ---
 

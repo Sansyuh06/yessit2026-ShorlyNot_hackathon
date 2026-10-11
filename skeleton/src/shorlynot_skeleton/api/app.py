@@ -31,6 +31,7 @@ from shorlynot_skeleton.backends.sim import SimBackend, IBMBackend
 from shorlynot_skeleton.detect.tau import TauCalculator
 from shorlynot_skeleton.qds.sessions import GLOBAL_ENTANGLEMENT_STORE
 from shorlynot_skeleton.qkd.key_registry import GLOBAL_KEY_REGISTRY
+from shorlynot_skeleton.pqc.identity import identity_message
 
 API_SECRET_KEY = os.environ.get("SHORLYNOT_API_KEY", "shorlynot-service-secret-key-2026")
 ADMIN_SECRET_KEY = os.environ.get("SHORLYNOT_ADMIN_KEY", "shorlynot-admin-secret-key-2026")
@@ -207,9 +208,22 @@ def sign_payload(req: SignRequest) -> SignatureBundle:
         L=req.L,
         backend=req.backend
     )
+    bundle.identity_sig = GLOBAL_KEY_REGISTRY.sign_identity(
+        req.key_id,
+        identity_message(bundle.payload_hash, bundle.nonce, bundle.key_id, bundle.n_checks, bundle.L)
+    )
     if "sign_latency_ms" in bundle.measurement_transcript:
         _METRICS_TELEMETRY["sign_times_ms"].append(bundle.measurement_transcript["sign_latency_ms"])
     return bundle
+
+
+def _attributed_user(classification) -> Optional[str]:
+    """Account proven (by ML-DSA signature) to be behind an impersonated bundle, if any."""
+    key = (classification.details or {}).get("attributed_key")
+    if not key:
+        return None
+    rec = GLOBAL_KEY_REGISTRY.get_key(key)
+    return rec.user_id if rec else key
 
 
 @app.post("/v1/verify", dependencies=[Depends(verify_api_auth)])
@@ -231,7 +245,8 @@ def verify_signature(req: VerifyRequest) -> Dict[str, Any]:
         bundle=req.bundle,
         verify_result=v_res,
         claimed_signer=req.claimed_signer,
-        verifier_id=req.verifier_id
+        verifier_id=req.verifier_id,
+        require_identity_sig=True
     )
 
     # Update stages if requested
@@ -242,7 +257,8 @@ def verify_signature(req: VerifyRequest) -> Dict[str, Any]:
             mismatch_rate=v_res.mismatch_rate,
             tau=v_res.tau,
             actor=req.claimed_signer or "external_client",
-            details=f"Direct /v1/verify submission: {classification.reason}"
+            details=f"Direct /v1/verify submission: {classification.reason}",
+            attributed_actor=_attributed_user(classification)
         )
 
     return {
@@ -290,9 +306,19 @@ def trigger_attack(attack_type: str, req: Optional[AttackTriggerRequest] = None)
         signer_key_id="alice-key-1",
         verifier_id="bob",
         tau_preset=TauPreset.NORMAL,
-        simulate_attack=attack_type
+        simulate_attack=attack_type,
+        source_id="demo-attacker"  # the demo harness plays an external attacker with its own origin
     )
     return execute_transfer_pipeline(pipe_req)
+
+
+@app.get("/v1/audit/verify", dependencies=[Depends(verify_admin_auth)])
+def verify_audit_chain(expected_head: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    """Verify the hash-chained audit log. Pass `expected_head` (a previously anchored head hash)
+    to also detect truncation of the tail."""
+    log = pipeline.stage_machine.audit
+    ok, bad_index = log.verify(expected_head)
+    return {"ok": ok, "first_bad_index": bad_index, "entries": len(log), "head": log.head()}
 
 
 @app.get("/v1/stages", response_model=StageState)

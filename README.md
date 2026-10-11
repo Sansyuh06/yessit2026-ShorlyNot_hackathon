@@ -30,13 +30,19 @@ Where:
 
 An honest signature produces an observed mismatch rate $\hat{p} \approx p_0 < \tau$. An attacker guessing states or tampering with the channel causes projective measurement collapse, driving $\hat{p} \to 0.50$, which reliably exceeds $\tau$ and triggers detection without attacker cooperation or injected flags.
 
-### 3. Stage Escalation & App-Level Bank Lock
+### 3. Identity, PQC and Response Policy
+- **Identity**: every bundle header carries an ML-DSA-44 (FIPS 204) signature checked against the registered key. Impersonators are caught and attributed from the signature alone.
+- **Key wrap**: syndromes are protected with AES-256-GCM under HKDF(BB84 key, ML-KEM-768 secret).
+- **Response**: only proven accounts and attacker sources are quarantined. A forged bundle that names Alice cannot lock Alice out. Stages decay over time, and every event goes into a tamper-evident hash chain.
+- **Attack-strength analysis**: see [ROC_ANALYSIS.md](docs/ROC_ANALYSIS.md) and [CLAIMS_VS_EVIDENCE.md](docs/CLAIMS_VS_EVIDENCE.md).
+
+### 4. Stage Escalation & App-Level Bank Lock
 When suspicious activity or threshold violations occur, the system steps through security stages:
 - **S0 (Normal)**: All operations permitted.
 - **S1 (Suspicious)**: Warnings logged, heightened telemetry.
-- **S2 (Quarantine / Suspended)**: Transfers involving the flagged account are rejected.
-- **S3 (High Threat)**: High-value and cross-account operations blocked.
-- **S4 (Lockdown)**: Full application-level gateway freeze.
+- **S2 (Quarantine / Suspended)**: Transfers from the attributed account or attacker source are rejected.
+- **S3 (High Threat)**: Elevated alert level. Scope stays per account or source unless link evidence exists.
+- **S4 (Lockdown)**: Full application-level gateway freeze. Requires measured link evidence (QBER) or a streak of attributed violations.
 
 All enforcement occurs at the application gateway (within the bank ledger and API client), without requiring privileged OS-level firewall or network modifications.
 
@@ -115,6 +121,8 @@ Run the automated scoreboard to evaluate detection rates and theoretical forgery
 
 ```bash
 python scripts/scoreboard.py
+python scripts/roc_benchmark.py   # attack-strength ROC analysis and plots
+python scripts/demo_attacks.py    # 8-step attack and defence walkthrough
 ```
 
 Run test suite:
@@ -131,3 +139,5 @@ pytest -v
 - [Benchmarks](docs/BENCHMARKS.md): Empirical latency and false reject rate curves.
 - [Deployment Guide](docs/DEPLOY.md): Configuration flags, multi-node deployment, and demo walkthrough.
 - [Known Limitations](docs/KNOWN_LIMITATIONS.md): Implementation boundaries and hardware trade-offs.
+- [Attack-Strength ROC Analysis](docs/ROC_ANALYSIS.md): Detector behaviour against partially informed attackers, Hoeffding vs exact threshold.
+- [Claims vs Evidence](docs/CLAIMS_VS_EVIDENCE.md): What each claim rests on, and what it does not show.
